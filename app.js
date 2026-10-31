@@ -12,6 +12,8 @@
             const indexOf = (x, y) => y * NX + x;
             const damX = Math.max(0, Math.min(NX - 1, Math.round((DAM.lng - EXTENT.west) / (EXTENT.east - EXTENT.west) * (NX - 1))));
             const damY = Math.max(0, Math.min(NY - 1, Math.round((EXTENT.north - DAM.lat) / (EXTENT.north - EXTENT.south) * (NY - 1))));
+            const downstreamProbeY = Math.min(NY - 1, damY + 8);
+            const downstreamProbe = indexOf(damX, downstreamProbeY);
             const dx = 6371000 * Math.cos(DAM.lat * Math.PI / 180) * (EXTENT.east - EXTENT.west) * Math.PI / 180 / NX;
             const dy = 6371000 * (EXTENT.north - EXTENT.south) * Math.PI / 180 / NY;
             const cellArea = dx * dy;
@@ -46,8 +48,7 @@
             if (!(window.TEHRI_DEM_GRID instanceof Int16Array) || window.TEHRI_DEM_GRID.length !== CELLS) {
                 throw new Error("The bundled Tehri DEM grid is missing or has an invalid size.");
             }
-            const defaultTerrain = new Float32Array(window.TEHRI_DEM_GRID);
-            bed.set(defaultTerrain);
+            bed.set(window.TEHRI_DEM_GRID);
 
             let demLayer = null;
             let demSampler = null;
@@ -166,7 +167,7 @@
                 data: {
                     labels: [],
                     datasets: [{
-                        label: "Breach discharge (m³/s)",
+                        label: "Water depth (m)",
                         data: [],
                         borderColor: "#62d4e8",
                         backgroundColor: "rgba(35, 155, 203, .18)",
@@ -184,7 +185,7 @@
                     scales: {
                         x: { title: { display: true, text: "Simulation time (h)", color: "#91a4af", font: { size: 10 } },
                             ticks: { color: "#91a4af", maxTicksLimit: 6, font: { size: 9 } }, grid: { color: "#2a3a45" } },
-                        y: { beginAtZero: true, title: { display: true, text: "m³/s", color: "#91a4af", font: { size: 10 } },
+                        y: { beginAtZero: true, title: { display: true, text: "Depth (m)", color: "#91a4af", font: { size: 10 } },
                             ticks: { color: "#91a4af", maxTicksLimit: 5, font: { size: 9 } }, grid: { color: "#2a3a45" } }
                     }
                 }
@@ -197,6 +198,8 @@
             const runButton = document.getElementById("run-button");
             const demStatus = document.getElementById("dem-status");
             const mapNote = document.getElementById("map-note");
+            document.getElementById("probe-note").textContent =
+                `Fixed model-cell probe ${((downstreamProbeY - damY) * dy / 1000).toFixed(1)} km south of the dam (diagnostic point, not a gauging station).`;
             const roughness = 0.04;
 
             function readInputs() {
@@ -224,6 +227,10 @@
                 const headRatio = Math.max(0, inputs.reservoir - damBed) / Math.max(1, 812 - damBed);
                 const recession = Math.pow(Math.max(0, 1 - time / (inputs.duration * 3600)), 1.15);
                 return inputs.discharge * Math.sqrt(headRatio) * recession;
+            }
+
+            function downstreamDepth() {
+                return depth[downstreamProbe];
             }
 
             function rusanovBed(left, right, xDirection, outH, outX, outY, correctionLeft, correctionRight, k) {
@@ -395,9 +402,10 @@
                 document.getElementById("stat-time").textContent = formatClock(simulationTime);
                 document.getElementById("stat-depth").textContent = `${maxDepth.toFixed(2)} m`;
                 document.getElementById("stat-area").textContent = `${(wetCells * cellArea / 1e6).toFixed(2)} km²`;
-                if (simulationTime - lastChartTime >= 60 || simulationTime === 0) {
+                const chartInterval = Math.max(60, inputs.duration * 3600 / 119);
+                if (simulationTime - lastChartTime >= chartInterval || simulationTime === 0) {
                     hydrograph.data.labels.push((simulationTime / 3600).toFixed(2));
-                    hydrograph.data.datasets[0].data.push(Math.round(hydrographDischarge(simulationTime, inputs)));
+                    hydrograph.data.datasets[0].data.push(Number(downstreamDepth().toFixed(3)));
                     if (hydrograph.data.labels.length > 120) {
                         hydrograph.data.labels.shift();
                         hydrograph.data.datasets[0].data.shift();
@@ -506,15 +514,20 @@
             }
 
             function rebuildTerrain() {
+                const terrain = new Float32Array(CELLS);
                 for (let y = 0; y < NY; y++) {
                     const lat = EXTENT.north - (y + 0.5) / NY * (EXTENT.north - EXTENT.south);
                     for (let x = 0; x < NX; x++) {
                         const lng = EXTENT.west + (x + 0.5) / NX * (EXTENT.east - EXTENT.west);
                         const i = indexOf(x, y);
                         const value = demSampler ? demSampler(lat, lng) : NaN;
-                        bed[i] = Number.isFinite(value) ? value : defaultTerrain[i];
+                        terrain[i] = Number.isFinite(value) ? value : NaN;
                     }
                 }
+                if (terrain.some(value => !Number.isFinite(value))) {
+                    throw new Error("The DEM must contain valid elevation data at every model-cell center.");
+                }
+                bed.set(terrain);
                 resetSimulation();
             }
 
@@ -522,27 +535,40 @@
                 const file = event.target.files && event.target.files[0];
                 if (!file) return;
                 demStatus.textContent = "Reading GeoTIFF and sampling elevation grid…";
+                let candidateLayer = null;
                 try {
                     const raster = await parseGeoraster(await file.arrayBuffer());
                     const sampler = makeDemSampler(raster);
-                    const validSamples = [];
-                    for (let y = 0; y < NY; y += 6) {
-                        for (let x = 0; x < NX; x += 6) {
+                    const candidateTerrain = new Float32Array(CELLS);
+                    let validSamples = 0;
+                    for (let y = 0; y < NY; y++) {
+                        for (let x = 0; x < NX; x++) {
                             const lat = EXTENT.north - (y + 0.5) / NY * (EXTENT.north - EXTENT.south);
                             const lng = EXTENT.west + (x + 0.5) / NX * (EXTENT.east - EXTENT.west);
-                            if (Number.isFinite(sampler(lat, lng))) validSamples.push(1);
+                            const value = sampler(lat, lng);
+                            const i = indexOf(x, y);
+                            if (Number.isFinite(value)) {
+                                candidateTerrain[i] = value;
+                                validSamples++;
+                            }
                         }
                     }
-                    if (!validSamples.length) throw new Error("The DEM does not overlap the simulation area.");
+                    if (validSamples !== CELLS) {
+                        throw new Error(`The DEM covers only ${validSamples.toLocaleString()} of ${CELLS.toLocaleString()} model-cell centers. Supply a valid DEM covering the full simulation area; partial uploads are not mixed with another terrain source.`);
+                    }
+                    readInputs();
+                    candidateLayer = new GeoRasterLayer({ georaster: raster, opacity: 0.42, resolution: 128 });
+                    candidateLayer.addTo(map);
+                    const previousLayer = demLayer;
+                    bed.set(candidateTerrain);
                     demSampler = sampler;
-                    if (demLayer) map.removeLayer(demLayer);
-                    demLayer = new GeoRasterLayer({ georaster: raster, opacity: 0.42, resolution: 128 });
-                    demLayer.addTo(map);
-                    rebuildTerrain();
-                    const percent = Math.round(validSamples.length / (Math.ceil(NY / 6) * Math.ceil(NX / 6)) * 100);
-                    demStatus.textContent = `Loaded ${file.name} · ${percent}% of sampled grid covered · band 1`;
-                    mapNote.textContent = `Uploaded DEM active · uncovered cells use attached DEM · red outline marks depths ≥ 0.1 m`;
+                    demLayer = candidateLayer;
+                    if (previousLayer) map.removeLayer(previousLayer);
+                    resetSimulation();
+                    demStatus.textContent = `Loaded ${file.name} · all ${CELLS.toLocaleString()} model-cell centers covered · band 1`;
+                    mapNote.textContent = `Uploaded DEM active · blue shading shows water depth; red outline shows the inundation boundary`;
                 } catch (error) {
+                    if (candidateLayer && map.hasLayer(candidateLayer)) map.removeLayer(candidateLayer);
                     demStatus.textContent = `Could not load DEM: ${error.message}`;
                     window.alert(`GeoTIFF error: ${error.message}`);
                 }
