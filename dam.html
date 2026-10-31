@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#101a22">
+    <title>Tehri Dam | 2D Flood Simulation</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/proj4@2.12.1/dist/proj4.js"></script>
+    <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <aside id="sidebar">
+        <header class="brand">
+            <span class="brand-mark" aria-hidden="true">≈</span><h1>Tehri Dam Flood Model</h1>
+            <p>2D shallow-water inundation simulator</p>
+        </header>
+        <div class="sidebar-scroll">
+            <section class="panel" aria-labelledby="scenario-heading">
+                <h2 class="section-title" id="scenario-heading">Simulation controls</h2>
+                <div class="field">
+                    <label for="dam">Dam / Reservoir</label>
+                    <select id="dam"><option selected>Tehri Dam</option></select>
+                </div>
+                <div class="field">
+                    <label for="scenario">Scenario</label>
+                    <select id="scenario"><option selected>Dam Break</option></select>
+                </div>
+                <div class="field">
+                    <label for="reservoir-level">Reservoir Level (m)</label>
+                    <input id="reservoir-level" type="number" min="600" max="900" step="1" value="812">
+                </div>
+                <div class="field">
+                    <label for="discharge">Discharge (m³/s)</label>
+                    <input id="discharge" type="number" min="100" max="100000" step="100" value="18000">
+                </div>
+                <div class="field">
+                    <label for="breach-width">Breach Width (m)</label>
+                    <input id="breach-width" type="number" min="10" max="1000" step="5" value="120">
+                </div>
+                <div class="field">
+                    <label for="breach-depth">Breach Depth (m)</label>
+                    <input id="breach-depth" type="number" min="1" max="200" step="1" value="45">
+                </div>
+                <div class="field">
+                    <label for="duration">Duration (Hours)</label>
+                    <input id="duration" type="number" min="0.25" max="24" step="0.25" value="6">
+                </div>
+            </section>
+
+            <section class="panel" aria-labelledby="dem-heading">
+                <h2 class="section-title" id="dem-heading">Elevation data</h2>
+                <div class="field">
+                    <label for="dem-file">Replace active terrain with a local DEM (.tif)</label>
+                    <input id="dem-file" type="file" accept=".tif,.tiff,image/tiff">
+                    <p class="field-hint">The attached 30 m DEM is active by default. Uploaded GeoTIFF band 1 elevations are treated as metres.</p>
+                    <p id="dem-status" class="field-hint dem-state" role="status">Attached Tehri DEM active · band 1 averaged onto the 120 × 120 model grid.</p>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="button-row">
+                    <button class="button" id="run-button" type="button">▶&nbsp; Run simulation</button>
+                    <button class="button secondary" id="reset-button" type="button">Reset</button>
+                </div>
+            </section>
+
+            <section class="panel chart-panel" aria-labelledby="chart-heading">
+                <h2 class="section-title" id="chart-heading">Breach outflow hydrograph</h2>
+                <div class="chart-wrap"><canvas id="hydrograph" aria-label="Breach discharge over simulated time"></canvas></div>
+            </section>
+            <p class="disclaimer">DEM-driven shallow-water approximation with an approx. 225 m grid, prescribed breach inflow, constant Manning n = 0.04, and open zero-gradient edge boundaries. Narrow terrain and breach features are unresolved; uncalibrated and not for forecasting, safety decisions, or engineering design.</p>
+        </div>
+    </aside>
+
+    <main id="map-container">
+        <div class="telemetry" aria-label="Simulation telemetry">
+            <div class="stat"><div class="stat-label">Time</div><div class="stat-value" id="stat-time">00:00:00</div></div>
+            <div class="stat"><div class="stat-label">Max depth</div><div class="stat-value" id="stat-depth">0.00 m</div></div>
+            <div class="stat"><div class="stat-label">Inundated area</div><div class="stat-value" id="stat-area">0.00 km²</div></div>
+        </div>
+        <div id="map" role="application" aria-label="Tehri Dam satellite map and simulated flood extent"></div>
+        <div class="map-note" id="map-note">Attached Tehri DEM · red outline marks depths ≥ 0.1 m</div>
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/georaster-layer-for-leaflet/dist/georaster-layer-for-leaflet.min.js"></script>
+    <script src="./tehri-dem-grid.js"></script>
+    <script src="./app.js"></script>
+</body>
+</html>
